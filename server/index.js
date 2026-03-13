@@ -86,15 +86,13 @@ ${content}`;
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
-
 // 静态文件服务（用于生产环境）
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// 所有非 API 请求都返回 index.html (SPA)
-app.get('*', (req, res) => {
-  if (req.path.startsWith('/api')) return; // 避免拦截 API
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
-});
+module.exports = app;
+
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+  });
+}
