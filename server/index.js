@@ -18,7 +18,7 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const modelName = "gemini-1.5-flash";
+const modelName = "gemini-1.5-flash-latest";
 const model = genAI.getGenerativeModel({
   model: modelName,
   generationConfig: {
