@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: seo-python-service
+    env: python
+    region: singapore # 建议选择离亚洲近的区域，或默认 oregon
+    buildCommand: "cd python_service && pip install -r requirements.txt"
+    startCommand: "cd python_service && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
