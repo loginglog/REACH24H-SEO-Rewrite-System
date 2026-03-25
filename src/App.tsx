@@ -11,29 +11,29 @@ const PLATFORMS = {
   BAIJIAHAO: {
     name: '百家号',
     url: 'https://baijiahao.baidu.com/builder/rc/edit?type=news',
-    guide: '相关内容可在瑞欧官网查看：',
-    linkStyle: (title: string, url?: string) => `<u>${title}</u>${url ? `<br/>(原文链接: ${url})` : ''}`,
+    guide: '<b>相关内容可在瑞欧官网查看：</b>',
+    linkStyle: (title: string, url?: string) => `<u>${url ? `<a href="${url}">${title}</a>` : title}</u>`,
     copyrightStyle: 'color: #999999;'
   },
   ZHIHU: {
     name: '知乎',
     url: 'https://www.zhihu.com/write',
-    guide: '<strong>相关阅读：</strong>',
-    linkStyle: (title: string, url?: string) => `<b>${url ? `<a href="${url}">` : ''}<strong><u>${title}</u></strong>${url ? '</a>' : ''}</b>`,
+    guide: '<b><strong>相关阅读：</strong></b>',
+    linkStyle: (title: string, url?: string) => `<b>${url ? `<a href="${url}">` : ''}<strong>${title}</strong>${url ? '</a>' : ''}</b>`,
     copyrightStyle: 'color: #000000;'
   },
   SOHU: {
     name: '搜狐',
     url: 'https://mp.sohu.com/mpfe/v3/main/news/add',
-    guide: '相关内容可在瑞欧官网查看：',
-    linkStyle: (title: string, url?: string) => `${title}${url ? `<br/>(原文链接: ${url})` : ''}`,
+    guide: '<b>相关内容可在瑞欧官网查看：</b>',
+    linkStyle: (title: string, url?: string) => `${title}${url ? ` (原文链接: ${url})` : ''}`,
     copyrightStyle: 'color: #000000;'
   },
   BILIBILI: {
     name: 'B站',
     url: 'https://member.bilibili.com/platform/upload/text/edit',
-    guide: '相关内容可在瑞欧官网查看：',
-    linkStyle: (title: string, url?: string) => `<u>${title}</u>${url ? `<br/>(原文链接: ${url})` : ''}`,
+    guide: '<b>相关内容可在瑞欧官网查看：</b>',
+    linkStyle: (title: string, url?: string) => `<u>${url ? `<a href="${url}">${title}</a>` : title}</u>`,
     copyrightStyle: 'color: #CCCCCC;'
   }
 }
@@ -46,15 +46,24 @@ interface Recommendation {
 }
 
 function App() {
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [isFetchingUrl, setIsFetchingUrl] = useState(false)
   const [inputText, setInputText] = useState('')
+  const [metaKeywords, setMetaKeywords] = useState('')
+  const [metaDescription, setMetaDescription] = useState('')
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [keywords, setKeywords] = useState<string[]>([])
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([])
   const [targetPlatform, setTargetPlatform] = useState<PlatformKey>('BAIJIAHAO')
   const [outputHtml, setOutputHtml] = useState('')
+  const [textRankScore, setTextRankScore] = useState<number | null>(null)
   const [isPredicting, setIsPredicting] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
 
+  const [cachedImages, setCachedImages] = useState<string[]>([])
+  const [publishedUrl, setPublishedUrl] = useState('')
+  const [isReporting, setIsReporting] = useState(false)
+  
   // 解析原文中的推荐阅读
   useEffect(() => {
     const lines = inputText.split('\n')
@@ -99,6 +108,35 @@ function App() {
     setRecommendations(foundRecs)
   }, [inputText])
 
+  const handleFetchUrl = async () => {
+    if (!sourceUrl) return
+    setIsFetchingUrl(true)
+    try {
+      const resp = await fetch('/api/ingest-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: sourceUrl })
+      })
+      const data = await resp.json()
+      if (resp.ok) {
+        setInputText(data.text)
+        setMetaKeywords(data.meta_keywords)
+        setMetaDescription(data.meta_description)
+        if (data.images && data.images.length > 0) {
+          setCachedImages(data.images)
+        } else {
+          setCachedImages([])
+        }
+      } else {
+        alert('抓取失败: ' + (data.details || data.error))
+      }
+    } catch (error) {
+      alert('网络错误，无法抓取')
+    } finally {
+      setIsFetchingUrl(false)
+    }
+  }
+
   // Task 1: 真实关键词预测
   const handlePredictKeywords = async () => {
     if (!inputText) return
@@ -107,7 +145,11 @@ function App() {
       const resp = await fetch('/api/predict-keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: inputText })
+        body: JSON.stringify({ 
+          content: inputText,
+          meta_keywords: metaKeywords,
+          meta_description: metaDescription
+        })
       });
       const data = await resp.json();
       if (resp.ok && data.keywords) {
@@ -128,42 +170,69 @@ function App() {
   const handleGenerate = async () => {
     if (!inputText || selectedKeywords.length === 0) return
     setIsGenerating(true)
+    setTextRankScore(null)
+    
     try {
+      // Step 1: 提取术语白名单
+      const termsResp = await fetch('/api/extract-terms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: inputText })
+      });
+      const termsData = termsResp.ok ? await termsResp.json() : { whitelist_terms: [] };
+      const whitelistTerms = termsData.whitelist_terms || [];
+
+      // Step 2: 生成改写内容
       const resp = await fetch('/api/rewrite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           content: inputText, 
           platform: targetPlatform, 
-          keywords: selectedKeywords 
+          keywords: selectedKeywords,
+          whitelist_terms: whitelistTerms
         })
       });
       const data = await resp.json();
       
       if (resp.ok && data.content) {
+        // Step 3: 中英数混排优化 (zhtypo) + TextRank
+        const optResp = await fetch('/api/optimize-typography', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: data.content })
+        });
+        
+        let finalHtml = data.content;
+        if (optResp.ok) {
+          const optData = await optResp.json();
+          finalHtml = optData.optimized_text;
+          setTextRankScore(optData.text_rank_score);
+        }
+
         const platform = PLATFORMS[targetPlatform]
-        let html = data.content;
         
         // 拼接推荐阅读
-        html += `<div style="margin-top: 20px;">`
-        html += `<p><b>${platform.guide}</b></p>`
+        finalHtml += `<div style="margin-top: 20px;">`
+        finalHtml += `<p>${platform.guide}</p>`
         recommendations.forEach(rec => {
-          html += `<p>${platform.linkStyle(rec.title, rec.url)}</p>`
+          finalHtml += `<p>${platform.linkStyle(rec.title, rec.url)}</p>`
         })
-        html += `</div>`
+        finalHtml += `</div>`
         
         // 版权声明
-        html += `<div style="margin-top: 20px; ${platform.copyrightStyle} font-size: 12px; line-height: 1.6;">`
-        html += `注：本文的内容与版权均归杭州瑞欧科技有限公司所有，受相关法律法规保护。未经杭州瑞欧科技有限公司书面协议授权，任何媒体、网站或个人，不得以转载、链接、转贴、镜像、摘录、改编或者其他任何形式，对本文的全部或部分内容进行复制、传播，否则我司将依法追究其相应的法律责任。 已获得我司授权的媒体、网站，需严格在授权协议约定的范围内使用本文内容，并且必须在使用时清晰注明 「内容来源：杭州瑞欧科技有限公司」，同时附带原文的文章链接。`
-        html += `</div>`
+        finalHtml += `<div style="margin-top: 20px; ${platform.copyrightStyle} font-size: 12px; line-height: 1.6;">`
+        finalHtml += `注：本文的内容与版权均归杭州瑞欧科技有限公司所有，受相关法律法规保护。未经杭州瑞欧科技有限公司书面协议授权，任何媒体、网站或个人，不得以转载、链接、转贴、镜像、摘录、改编或者其他任何形式，对本文的全部或部分内容进行复制、传播，否则我司将依法追究其相应的法律责任。 已获得我司授权的媒体、网站，需严格在授权协议约定的范围内使用本文内容，并且必须在使用时清晰注明 「内容来源：杭州瑞欧科技有限公司」，同时附带原文的文章链接。`
+        if (targetPlatform === 'BILIBILI') {
+          finalHtml += ` 内容合作及授权请联系：<a href="mailto:info@reach24h.com" style="color:#CCCCCC;">info@reach24h.com</a>`;
+        }
+        finalHtml += `</div>`
 
-        setOutputHtml(html)
+        setOutputHtml(finalHtml)
       } else {
-        console.error('Rewrite failed:', data);
-        alert(`改写失败: ${data.details || data.error || '未知错误'}`);
+        alert(`改写失败: ${data.details || data.error}`);
       }
     } catch (err) {
-      console.error(err);
       alert('文章改写失败，请检查网络连接');
     } finally {
       setIsGenerating(false);
@@ -197,6 +266,15 @@ function App() {
 
       console.log('Clipboard write successful, opening platform:', PLATFORMS[targetPlatform].url);
       
+      // Schedule cleanup for cached images
+      if (cachedImages.length > 0) {
+        fetch('/api/schedule-cleanup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ images: cachedImages })
+        }).catch(e => console.error("Cleanup scheduling failed", e));
+      }
+      
       const targetUrl = PLATFORMS[targetPlatform].url;
       const platformName = PLATFORMS[targetPlatform].name;
 
@@ -215,6 +293,37 @@ function App() {
     } catch (err) {
       console.error('Publish error:', err);
       alert(`发布失败: ${err instanceof Error ? err.message : String(err)} \n请尝试手动复制内容。`);
+    }
+  }
+
+  const handleReportPublish = async () => {
+    if (!publishedUrl || !outputHtml) return
+    setIsReporting(true)
+    
+    // Extract title from outputHtml
+    const h1Match = outputHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
+    const articleTitle = h1Match ? h1Match[1].replace(/<[^>]+>/g, '') : "未命名标题";
+    
+    try {
+      const resp = await fetch('/api/report-publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: publishedUrl,
+          title: articleTitle,
+          platform: PLATFORMS[targetPlatform].name
+        })
+      });
+      if (resp.ok) {
+        setPublishedUrl('')
+        alert('✅ 链接已提交至 BaiduSpider 监测队列\n系统将在 D0/D3/D5 凌晨执行百度排名查询。')
+      } else {
+        alert('提交失败，请重试')
+      }
+    } catch(e) {
+      alert('网络错误')
+    } finally {
+      setIsReporting(false)
     }
   }
 
@@ -249,12 +358,24 @@ function App() {
                   <Wand2 className="w-5 h-5 text-primary" />
                   原文输入
                 </CardTitle>
-                <CardDescription>粘贴 Word 内容或文本，自动分析推荐阅读</CardDescription>
+                <CardDescription>粘贴文章 URL 或 直接纯文本输入</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    placeholder="输入瑞欧官网文章链接 (https://...)"
+                    className="flex-1 h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-sm shadow-sm transition-colors"
+                    value={sourceUrl}
+                    onChange={(e) => setSourceUrl(e.target.value)}
+                  />
+                  <Button onClick={handleFetchUrl} disabled={!sourceUrl || isFetchingUrl} size="sm">
+                    {isFetchingUrl ? '抓取中...' : '智能提取'}
+                  </Button>
+                </div>
                 <Textarea 
                   placeholder="在此粘贴文章内容..." 
-                  className="min-h-[300px] font-mono text-xs"
+                  className="min-h-[250px] font-mono text-xs"
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                 />
@@ -310,10 +431,12 @@ function App() {
           {/* 右侧：预览与发布 */}
           <div className="space-y-6">
             <Card className="h-full flex flex-col">
-              <CardHeader className="flex-row items-center justify-between space-y-0">
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <div>
                   <CardTitle>结果预览</CardTitle>
-                  <CardDescription>符合 {PLATFORMS[targetPlatform].name} 渲染规范</CardDescription>
+                  <CardDescription>符合 {PLATFORMS[targetPlatform].name} 渲染规范 
+                    {textRankScore !== null && <span className="text-xs text-emerald-600 block mt-1">SEO 权重分值 (TextRank): {textRankScore}</span>}
+                  </CardDescription>
                 </div>
                 {outputHtml && (
                   <Button variant="outline" size="icon" onClick={() => {
@@ -360,6 +483,38 @@ function App() {
                 )}
               </CardFooter>
             </Card>
+
+            {/* 监控组件 */}
+            {outputHtml && (
+              <Card className="mt-6 border-indigo-100 bg-indigo-50/30">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-indigo-900 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4" />
+                    BaiduSpider 排名监控闭环
+                  </CardTitle>
+                  <CardDescription>
+                    发布成功后，请将文章正式 URL 填回此处。系统将在 D0/D3/D5 自动追踪百度收录与排名。
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex gap-2">
+                  <input
+                    type="url"
+                    placeholder="在此粘贴已发布的文章链接..."
+                    className="flex-1 h-9 rounded-md border border-indigo-200 bg-white px-3 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    value={publishedUrl}
+                    onChange={(e) => setPublishedUrl(e.target.value)}
+                  />
+                  <Button 
+                    onClick={handleReportPublish} 
+                    disabled={!publishedUrl || isReporting} 
+                    size="sm"
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    {isReporting ? '提交中...' : '提交监控'}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
       </div>
