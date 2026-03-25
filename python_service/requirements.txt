@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+beautifulsoup4
+requests
+pydantic
+jieba
+textrank4zh
+pangu
+lxml
+python-multipart
