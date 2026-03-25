@@ -131,6 +131,11 @@ async def ingest_article(req: IngestRequest):
     # Extract Pure Text
     clean_text = article_detail.get_text(separator='\n', strip=True)
     
+    # Remove standard boilerplate
+    boilerplate_idx = clean_text.find("关注“瑞欧佰药”")
+    if boilerplate_idx != -1:
+        clean_text = clean_text[:boilerplate_idx].strip()
+    
     return IngestResponse(
         text=clean_text,
         meta_keywords=meta_keywords,
